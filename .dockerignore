@@ -1,0 +1,13 @@
+.git
+.github
+.vscode
+.idea
+.cursor
+graphify-out
+.graphifyrc
+.graphifyignore
+.graphify
+bin
+PLAN.md
+*.test
+*.out

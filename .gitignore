@@ -1,0 +1,22 @@
+# Go
+*.exe
+*.test
+*.out
+/bin/
+/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Cursor — local editor config/rules only
+.cursor/
+
+# Graphify — local knowledge graph only (never push)
+graphify-out/
+.graphifyrc
+.graphifyignore
+.graphify/

@@ -1,0 +1,135 @@
+name: bulkdoc
+
+# Everything runs in containers; no local Go toolchain is needed.
+#
+#   docker compose run --build --rm check      build, vet, gofmt, hygiene rules
+#   docker compose run --build --rm test       go test -race -count=10 ./... (incl. Postgres tests)
+#   docker compose run --build --rm bench      BenchmarkProcessBatch
+#   docker compose run --build --rm e2e        black-box test: app + postgres + mock principal
+#   docker compose up --build app              run the service on http://localhost:8080
+#   docker compose down -v                     clean up
+
+x-go-env: &go-env
+  DATABASE_URL: postgres://bulkdoc:bulkdoc@postgres:5432/bulkdoc?sslmode=disable
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bulkdoc
+      POSTGRES_PASSWORD: bulkdoc
+      POSTGRES_DB: bulkdoc
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bulkdoc -d bulkdoc"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mock-principal:
+    build:
+      context: .
+      target: mockprincipal
+    environment:
+      LISTEN_ADDR: ":9090"
+      CALLBACK_URL: http://app:8080/callbacks
+      SUBMIT_LATENCY: 150ms
+      DUPLICATE_CALLBACKS: "true"
+    healthcheck:
+      test: ["CMD", "/mockprincipal", "-healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      target: server
+    environment:
+      <<: *go-env
+      HTTP_ADDR: ":8080"
+      PRINCIPAL_URL: http://mock-principal:9090
+      SUBMIT_TIMEOUT: 5s
+      LEASE_DURATION: 10m
+      RECOVERY_INTERVAL: 30s
+      BACKOFF_BASE: 0s
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-principal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/server", "-healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  check:
+    profiles: ["verify"]
+    build:
+      context: .
+      target: check
+
+  test:
+    profiles: ["verify"]
+    build:
+      context: .
+      target: test
+    environment:
+      <<: *go-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - gocache:/root/.cache/go-build
+
+  bench:
+    profiles: ["verify"]
+    build:
+      context: .
+      target: bench
+    volumes:
+      - gocache:/root/.cache/go-build
+
+  e2e:
+    profiles: ["verify"]
+    build:
+      context: .
+      target: e2e
+    environment:
+      APP_URL: http://app:8080
+      PRINCIPAL_URL: http://mock-principal:9090
+    depends_on:
+      app:
+        condition: service_healthy
+      mock-principal:
+        condition: service_healthy
+    volumes:
+      - gocache:/root/.cache/go-build
+
+  # Developer helper: bind-mounts the sources so `go mod tidy` / `gofmt -w` write back to the host.
+  #   docker compose run --rm dev go mod tidy
+  dev:
+    profiles: ["tools"]
+    build:
+      context: .
+      target: base
+    working_dir: /src
+    environment:
+      <<: *go-env
+    volumes:
+      - .:/src
+      - gocache:/root/.cache/go-build
+      - gomod:/go/pkg/mod
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  gocache:
+  gomod:
